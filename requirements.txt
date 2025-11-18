@@ -1,0 +1,8 @@
+streamlit
+pandas
+numpy
+scikit-learn
+lightgbm        # preferencial (opcional — se falhar, RandomForest é usado)
+ccxt            # para buscar candles públicos das exchanges
+ta              # indicadores técnicos
+yfinance        # fallback para alguns símbolos, opcional
