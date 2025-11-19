@@ -1,5 +1,5 @@
-# trading_bot_streamlit.py (totalmente refeito)
-# Versão não-bloqueante, live loop responsivo, fallback, dashboard animado, heatmap, padrões, IA
+# trading_bot_streamlit.py (atualizado)
+# Versão com atualização não-bloqueante a cada 30s e botão manual
 
 import streamlit as st
 import pandas as pd
@@ -69,7 +69,6 @@ def fetch_ohlcv(_exchange, symbol, timeframe, limit=500):
         df.set_index('timestamp', inplace=True)
         return df
     except Exception as e:
-        # fallback
         for name, ex in EXCHANGES.items():
             if ex != _exchange:
                 try:
@@ -81,7 +80,7 @@ def fetch_ohlcv(_exchange, symbol, timeframe, limit=500):
         st.warning('Todas as exchanges falharam.')
         return pd.DataFrame()
 
-# Features simples
+# Features
 def add_features(df):
     df = df.copy()
     df['return'] = df['close'].pct_change()
@@ -103,7 +102,6 @@ def add_features(df):
 # Candle patterns
 def is_hammer(o,h,l,c): return (min(o,c)-l > 2*abs(c-o)) and (h-max(o,c) < 0.25*abs(c-o))
 def is_doji(o,h,l,c,tol=0.15): return abs(c-o) <= tol*(h-l+1e-9)
-
 def bullish_engulf(prev,o,h,l,c,po,ph,pl,pc): return (pc<po) and (c>o) and (c>po) and (o<pc)
 def bearish_engulf(prev,o,h,l,c,po,ph,pl,pc): return (pc>po) and (c<o) and (o>pc) and (c<po)
 
@@ -116,56 +114,50 @@ with col1:
     timeframe_choice = st.selectbox('Timeframe', TIMEFRAMES, index=2)
     start_live = st.button('▶️ Start Live')
     stop_live = st.button('⏹ Stop')
+    manual_run = st.button('⚡ Atualizar Manualmente')
 with col2:
     model_choice = st.selectbox('Modelo IA', ['RandomForest','XGBoost','LSTM'])
     run_train = st.button('Treinar/Atualizar Modelo')
 
 exchange = EXCHANGES[exchange_choice]
-
-# Placeholder do gráfico e métricas
 chart_placeholder = st.empty()
 stats_placeholder = st.empty()
 patterns_placeholder = st.empty()
 
-# Controle live
 if 'live' not in st.session_state: st.session_state.live = False
 if start_live: st.session_state.live = True
 if stop_live: st.session_state.live = False
 
-# Atualização automática a cada 5s
-if st.session_state.live:
-    count = st_autorefresh(interval=5000, limit=None, key='datarefresh')
-
-    # fetch + features
+# Função para atualizar dashboard
+def update_dashboard():
     df_raw = fetch_ohlcv(exchange, symbol_choice, timeframe_choice, limit=300)
     if df_raw.empty:
-        st.warning('Sem dados para este símbolo/exchange.')
-    else:
-        df_feat = add_features(df_raw)
-        last = df_feat.iloc[-1]
-        prev = df_feat.iloc[-2]
+        st.warning('Sem dados.')
+        return
+    df_feat = add_features(df_raw)
+    last = df_feat.iloc[-1]
+    prev = df_feat.iloc[-2]
+    signal = 'SUBIR' if last['close']>prev['close'] else 'DESCER'
+    color_class = 'signal-up' if signal=='SUBIR' else 'signal-down'
+    stats_placeholder.markdown(f"<div class='{color_class}'>Último: {last['close']:.2f} | Sinal: {signal}</div>", unsafe_allow_html=True)
+    patterns=[]
+    if is_hammer(last['open'],last['high'],last['low'],last['close']): patterns.append('Hammer')
+    if is_doji(last['open'],last['high'],last['low'],last['close']): patterns.append('Doji')
+    if bullish_engulf(None,last['open'],last['high'],last['low'],last['close'],prev['open'],prev['high'],prev['low'],prev['close']): patterns.append('Bull Engulf')
+    if bearish_engulf(None,last['open'],last['high'],last['low'],last['close'],prev['open'],prev['high'],prev['low'],prev['close']): patterns.append('Bear Engulf')
+    patterns_placeholder.markdown(f"<div class='metric-card'><b>Padrões:</b> {', '.join(patterns) if patterns else 'Nenhum'}</div>", unsafe_allow_html=True)
+    fig = go.Figure(data=[go.Candlestick(x=df_feat.index, open=df_feat['open'], high=df_feat['high'], low=df_feat['low'], close=df_feat['close'])])
+    fig.update_layout(template='plotly_dark', height=600)
+    chart_placeholder.plotly_chart(fig, use_container_width=True)
 
-        # sinal simples
-        signal = 'SUBIR' if last['close']>prev['close'] else 'DESCER'
+# Atualização automática a cada 30s
+if st.session_state.live:
+    count = st_autorefresh(interval=30000, limit=None, key='datarefresh')
+    update_dashboard()
 
-        # dashboard
-        color_class = 'signal-up' if signal=='SUBIR' else 'signal-down'
-        stats_placeholder.markdown(f"<div class='{color_class}'>Último: {last['close']:.2f} | Sinal: {signal}</div>", unsafe_allow_html=True)
+# Atualização manual
+if manual_run:
+    update_dashboard()
 
-        # candle patterns
-        patterns=[]
-        if is_hammer(last['open'],last['high'],last['low'],last['close']): patterns.append('Hammer')
-        if is_doji(last['open'],last['high'],last['low'],last['close']): patterns.append('Doji')
-        if bullish_engulf(None,last['open'],last['high'],last['low'],last['close'],prev['open'],prev['high'],prev['low'],prev['close']): patterns.append('Bull Engulf')
-        if bearish_engulf(None,last['open'],last['high'],last['low'],last['close'],prev['open'],prev['high'],prev['low'],prev['close']): patterns.append('Bear Engulf')
-        patterns_placeholder.markdown(f"<div class='metric-card'><b>Padrões:</b> {', '.join(patterns) if patterns else 'Nenhum'}</div>", unsafe_allow_html=True)
-
-        # gráfico Plotly
-        fig = go.Figure(data=[go.Candlestick(x=df_feat.index, open=df_feat['open'], high=df_feat['high'], low=df_feat['low'], close=df_feat['close'])])
-        fig.update_layout(template='plotly_dark', height=600)
-        chart_placeholder.plotly_chart(fig, use_container_width=True)
-
-else:
-    st.info('Clique ▶️ Start Live para iniciar atualizações em tempo real.')
-
-st.markdown('**Requisitos:** pip install streamlit ccxt pandas numpy scikit-learn plotly tensorflow xgboost streamlit-autorefresh')
+if not st.session_state.live and not manual_run:
+    st.info('Clique ▶️ Start Live ou ⚡ Atualizar Manualmente para carregar dados.')
